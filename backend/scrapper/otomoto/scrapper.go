@@ -20,7 +20,6 @@ var (
 	power             uint64
 	mileage           uint64
 	pageCount         int = 1
-	listingCount      int
 	mutex             sync.Mutex
 	currentPage       int = 1
 	anchorsFound      int = 0
@@ -28,6 +27,43 @@ var (
 )
 
 func ScrapArticles(link string) {
+	c, offerCollector := createCollectors()
+	c.OnRequest(func(r *colly.Request) {
+		fmt.Println("Visiting URL: ", r.URL.String())
+	})
+
+	c.OnHTML("article[data-id]", func(e *colly.HTMLElement) {
+		articleHandler(e, offerCollector)
+	})
+
+	if currentPage == 1 {
+		c.OnHTML("li[data-testid=pagination-list-item]", paginationHandler)
+	}
+
+	offerCollector.OnHTML("div[data-testid=summary-info-area]", offerSummaryHandler)
+	offerCollector.OnHTML("div[data-testid=content-details-section]", offerDetailsHandler)
+
+	offerCollector.OnScraped(func(e *colly.Response) {
+		saveAllListings()
+	})
+
+	c.OnError(errorHandler)
+	offerCollector.OnError(errorHandler)
+
+	c.OnScraped(func(r *colly.Response) {
+		onScrapedHandler(r, link, offerCollector)
+	})
+
+	err := c.Visit(link)
+	if err != nil {
+		log.Panic("Error visiting the website: ", err.Error())
+	}
+
+	c.Wait()
+	offerCollector.Wait()
+}
+
+func createCollectors() (*colly.Collector, *colly.Collector) {
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
@@ -39,198 +75,164 @@ func ScrapArticles(link string) {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
+
 	c := colly.NewCollector(
+		colly.AllowURLRevisit(),
 		colly.AllowedDomains("otomoto.pl", "www.otomoto.pl"),
 		colly.Async(true),
 	)
-
 	c.WithTransport(transport)
 
-	detailsCollector := c.Clone()
-	detailsCollector.WithTransport(transport)
+	offerCollector := c.Clone()
+	offerCollector.WithTransport(transport)
 
-	c.OnRequest(func(r *colly.Request) {
-		fmt.Println("Visiting URL: ", r.URL.String())
-	})
+	return c, offerCollector
+}
 
-	c.OnHTML("article[data-id]", func(e *colly.HTMLElement) {
-		href := e.ChildAttr("h1 a[href]", "href")
-		if href == "" {
-			log.Println("Href not found")
-			e.Request.Retry()
-			return
-		}
-		log.Println("Anchor found: ", href)
-
-		mutex.Lock()
-		totalAnchorsFound++
-		anchorsFound++
-		mutex.Unlock()
-
-		err := detailsCollector.Visit(href)
-		if err != nil {
-			log.Println("Error visiting the offer for details: ", err.Error())
-		}
-
-		if pageCount == currentPage {
-			detailsCollector.Wait()
-		}
-
-		_ = models.CarListing{
-			Link: href,
-		}
-	})
-
-	if currentPage == 1 {
-		c.OnHTML("li[data-testid=pagination-list-item]", func(e *colly.HTMLElement) {
-			p, err := strconv.ParseInt(e.ChildText("a span"), 10, 16)
-			if err != nil {
-				log.Panic(err.Error())
-			}
-
-			mutex.Lock()
-			pageCount = int(p)
-			mutex.Unlock()
-		})
+func articleHandler(e *colly.HTMLElement, c *colly.Collector) {
+	href := e.ChildAttr("h1 a[href]", "href")
+	if href == "" {
+		log.Println("Href not found, trying again")
+		e.Request.Retry()
+		return
 	}
 
-	detailsCollector.OnHTML("div[data-testid=summary-info-area]", func(e *colly.HTMLElement) {
-		priceStr := strings.ReplaceAll(e.ChildText("h3.offer-price__number"), " ", "")
-		priceStr = strings.ReplaceAll(priceStr, ",", ".")
-		price, err := strconv.ParseFloat(priceStr, 64)
+	mutex.Lock()
+	totalAnchorsFound++
+	anchorsFound++
+	mutex.Unlock()
+
+	err := c.Visit(href)
+	if err != nil {
+		log.Println("Error visiting the offer for details: ", err.Error())
+	}
+}
+
+func paginationHandler(e *colly.HTMLElement) {
+	p, err := strconv.ParseInt(e.ChildText("a span"), 10, 16)
+	if err != nil {
+		log.Panic("Error on pagination handler: ", err.Error())
+	}
+
+	mutex.Lock()
+	pageCount = int(p)
+	mutex.Unlock()
+}
+
+func offerSummaryHandler(e *colly.HTMLElement) {
+	pStr := strings.ReplaceAll(e.ChildText("h3.offer-price__number"), " ", "")
+	pStr = strings.ReplaceAll(pStr, ",", ".")
+	price, err := strconv.ParseFloat(pStr, 64)
+	if err != nil {
+		log.Println("Error parsing price: ", err.Error())
+	}
+
+	listing := getOrCreateListing(e.Request.URL.String())
+	listing.Title = e.ChildText("div h3.offer-title")
+	listing.Price = price
+}
+
+func offerDetailsHandler(e *colly.HTMLElement) {
+	details := make(map[string]string)
+
+	e.ForEach("div[data-testid=advert-details-item]", func(_ int, d *colly.HTMLElement) {
+		key := d.DOM.Find("p").First().Text()
+		value := d.DOM.Find("p").Last().Text()
+
+		if value == "" || value == key {
+			value = d.DOM.Find("a").Last().Text()
+		}
+
+		if key != "" && value != "" {
+			details[key] = value
+		}
+	})
+
+	year, err := strconv.ParseUint(details["Rok produkcji"], 10, 16)
+	if err != nil {
+		log.Println("Error parsing year:", err.Error())
+		return
+	}
+
+	r := regexp.MustCompile(`\D+`)
+
+	mileageStr := r.ReplaceAllString(details["Przebieg"], "")
+	if mileageStr != "" {
+		mileage, err = strconv.ParseUint(mileageStr, 10, 32)
 		if err != nil {
-			log.Println("Error parsing price: ", err.Error())
+			log.Println("Error parsing power: ", err.Error())
 		}
+	} else {
+		mileage = 0
+	}
 
-		_ = models.CarListing{
-			Price: price,
-			Title: e.ChildText("div h3.offer-title"),
-		}
-	})
-
-	detailsCollector.OnHTML("div[data-testid=content-details-section]", func(e *colly.HTMLElement) {
-		mutex.Lock()
-		listingCount++
-		mutex.Unlock()
-
-		details := make(map[string]string)
-
-		e.ForEach("div[data-testid=advert-details-item]", func(_ int, d *colly.HTMLElement) {
-			key := d.DOM.Find("p").First().Text()
-			value := d.DOM.Find("p").Last().Text()
-
-			if value == "" || value == key {
-				value = d.DOM.Find("a").Last().Text()
-			}
-
-			if key != "" && value != "" {
-				details[key] = value
-			}
-		})
-
-		year, err := strconv.ParseUint(details["Rok produkcji"], 10, 16)
+	powerStr := r.ReplaceAllString(details["Moc"], "")
+	if powerStr != "" {
+		power, err = strconv.ParseUint(powerStr, 10, 16)
 		if err != nil {
-			log.Println("Error parsing year:", err.Error())
-			return
+			log.Println("Error parsing power: ", err.Error())
 		}
+	} else {
+		power = 0
+	}
 
-		r := regexp.MustCompile(`\D+`)
+	listing := getOrCreateListing(e.Request.URL.String())
+	listing.BodyType = details["Typ nadwozia"]
+	listing.Gearbox = details["Skrzynia biegów"]
+	listing.FuelType = details["Rodzaj paliwa"]
+	listing.Color = details["Kolor"]
+	listing.Version = details["Wersja"]
+	listing.Power = uint16(power)
+	listing.Year = uint16(year)
+	listing.Mileage = uint32(mileage)
 
-		mileageStr := r.ReplaceAllString(details["Przebieg"], "")
-		if mileageStr != "" {
-			mileage, err = strconv.ParseUint(mileageStr, 10, 32)
-			if err != nil {
-				log.Println("Error parsing power: ", err.Error())
-			}
-		} else {
-			mileage = 0
-		}
+	if listing.Gearbox == "" || listing.FuelType == "" || listing.Color == "" || listing.BodyType == "" {
+		e.Request.Retry()
+		log.Println("Getting listing data failed, retrying...")
+		return
+	}
+}
 
-		powerStr := r.ReplaceAllString(details["Moc"], "")
-		if powerStr != "" {
-			power, err = strconv.ParseUint(powerStr, 10, 16)
-			if err != nil {
-				log.Println("Error parsing power: ", err.Error())
-			}
-		} else {
-			power = 0
-		}
+func errorHandler(r *colly.Response, err error) {
+	if r.StatusCode == 0 || r.StatusCode == 429 || r.StatusCode >= 500 || r.StatusCode == 408 {
+		time.Sleep(5 * time.Second)
+		r.Request.Retry()
+		return
+	} else if r.StatusCode == 404 {
+		log.Println("Page not found: ", r.Request.URL)
+		return
+	}
+	log.Panicf("Request URL: %s failed with statusCode: %d\nError: %s", r.Request.URL, r.StatusCode, err.Error())
+}
 
-		listing = models.CarListing{
-			Gearbox:  details["Skrzynia biegów"],
-			FuelType: details["Rodzaj paliwa"],
-			Color:    details["Kolor"],
-			Version:  details["Wersja"],
-			Power:    uint16(power),
-			Year:     uint16(year),
-			Mileage:  uint32(mileage),
-			ID:       uint32(listingCount),
-		}
-	})
+func onScrapedHandler(r *colly.Response, link string, offerCollector *colly.Collector) {
+	fmt.Println("\nFinished browsing URL: ", r.Request.URL)
+	fmt.Println("Total Anchors found: ", totalAnchorsFound)
 
-	detailsCollector.OnScraped(func(e *colly.Response) {
-		fmt.Println(listing)
-	})
-
-	c.OnError(func(r *colly.Response, err error) {
-		if r.StatusCode == 0 || r.StatusCode == 429 || r.StatusCode >= 500 || r.StatusCode == 408 {
-			time.Sleep(5 * time.Second)
-			r.Request.Retry()
-			return
-		} else if r.StatusCode == 404 {
-			return
-		}
-		log.Panicf("Request URL: %s failed with statusCode: %d\nError: %s", r.Request.URL, r.StatusCode, err.Error())
-	})
-
-	detailsCollector.OnError(func(r *colly.Response, err error) {
-		if r.StatusCode == 0 || r.StatusCode == 429 || r.StatusCode >= 500 || r.StatusCode == 408 {
-			time.Sleep(5 * time.Second)
-			r.Request.Retry()
-			return
-		} else if r.StatusCode == 404 {
-			return
-		}
-		log.Panicf("Request URL: %s failed with statusCode: %d\nError: %s", r.Request.URL, r.StatusCode, err.Error())
-	})
-
-	c.OnScraped(func(r *colly.Response) {
-		fmt.Println("\nFinished browsing URL: ", r.Request.URL)
-		fmt.Println("Total Anchors found: ", totalAnchorsFound)
-
-		mutex.Lock()
-		if anchorsFound != 32 && currentPage < pageCount {
-			log.Printf("Expected 32 links, but found %d. Retrying page %d\n", anchorsFound, currentPage)
-
-			anchorsFound = 0
-
-			err := r.Request.Retry()
-			if err != nil {
-				log.Println("Error retrying page ", currentPage)
-				log.Println(err.Error())
-			}
-			mutex.Unlock()
-			return
-		}
+	if anchorsFound != 32 && currentPage < pageCount {
+		log.Printf("Expected 32 links, but found %d. Retrying page %d\n", anchorsFound, currentPage)
 
 		anchorsFound = 0
-		currentPage++
-		if currentPage <= pageCount {
-			nextPage := fmt.Sprintf("%s?page=%d", link, currentPage)
-			err := r.Request.Visit(nextPage)
-			if err != nil {
-				log.Println("Error visiting page ", nextPage)
-				log.Print(err.Error())
-			}
-		}
-		mutex.Unlock()
-	})
 
-	err := c.Visit(link)
-	if err != nil {
-		log.Panic("Error visiting the website: ", err.Error())
+		err := r.Request.Retry()
+		if err != nil {
+			log.Println("Error retrying page ", currentPage)
+			log.Println(err.Error())
+		}
+		return
 	}
 
-	detailsCollector.Wait()
-	c.Wait()
+	anchorsFound = 0
+	currentPage++
+	if currentPage <= pageCount {
+		nextPage := fmt.Sprintf("%s?page=%d", link, currentPage)
+		err := r.Request.Visit(nextPage)
+		if err != nil {
+			log.Println("Error visiting page ", nextPage)
+			log.Print(err.Error())
+		}
+	}
+	if pageCount == currentPage {
+		offerCollector.Wait()
+	}
 }
