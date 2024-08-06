@@ -1,0 +1,4 @@
+package carListingHandler
+
+func GetListings() {
+}

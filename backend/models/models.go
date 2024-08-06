@@ -22,6 +22,7 @@ type Config struct {
 	DBHost     string
 	DBPort     string
 	DBName     string
+	ServerPort string
 }
 type CustomLogger struct {
 	logger.Interface

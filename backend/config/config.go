@@ -19,5 +19,6 @@ func LoadConfig() *models.Config {
 		DBHost:     os.Getenv("DB_HOST"),
 		DBPort:     os.Getenv("DB_PORT"),
 		DBName:     os.Getenv("DB_NAME"),
+		ServerPort: os.Getenv("SERVER_PORT"),
 	}
 }

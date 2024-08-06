@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/thegroobi/web-listing-scrapper/api/server"
 	"github.com/thegroobi/web-listing-scrapper/config"
 	db "github.com/thegroobi/web-listing-scrapper/database"
 )
@@ -13,5 +14,5 @@ func main() {
 	db.DBStatus()
 
 	// otomoto.ScrapArticles(link)
-	api.startServer()
+	server.StartServer(cfg.ServerPort)
 }

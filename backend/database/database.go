@@ -25,6 +25,7 @@ func InitDB(cfg *models.Config) {
 	if err := db.AutoMigrate(&models.CarListing{}); err != nil {
 		log.Panicf("Failed to mimgrate the db : %v", err)
 	}
+	log.Println("Database Migrated")
 
 	DB = db
 }
