@@ -31,3 +31,7 @@ type AggregatedCarListing struct {
 	Summary   *CarListing
 	Completed bool
 }
+
+type UserData struct {
+	Link string `json:"link" xml:"link" form:"link"`
+}

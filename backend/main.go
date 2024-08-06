@@ -10,8 +10,6 @@ import (
 	db "github.com/thegroobi/web-listing-scrapper/database"
 )
 
-var link = "https://www.otomoto.pl/osobowe/honda/accord"
-
 func main() {
 	cfg := config.LoadConfig()
 	app := fiber.New()
@@ -19,12 +17,6 @@ func main() {
 	db.InitDB(cfg)
 	db.DBStatus()
 
-	// otomoto.ScrapArticles(link)
-
-	app.Get("/", func(c *fiber.Ctx) error {
-		return c.SendString("Server running!")
-	})
-
-	log.Fatal(app.Listen(fmt.Sprintf(":%s", cfg.ServerPort)))
 	router.SetupRouter(app)
+	log.Fatal(app.Listen(fmt.Sprintf(":%s", cfg.ServerPort)))
 }

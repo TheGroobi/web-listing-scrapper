@@ -1,4 +1,4 @@
-package carListingHandler
+package handler
 
 import (
 	"github.com/gofiber/fiber/v2"
@@ -13,8 +13,8 @@ func GetListings(c *fiber.Ctx) error {
 	db.Find(&listings)
 
 	if len(listings) == 0 {
-		return c.Status(404).JSON(fiber.Map{"status": "error", "message": "No listings found", "data": nil})
+		return c.Status(404).JSON(fiber.Map{"status": "error", "code": 404, "message": "No listings found", "data": nil})
 	}
 
-	return c.Status(200).JSON(fiber.Map{"status": "success", "message": "Listings found", "data": listings})
+	return c.Status(200).JSON(fiber.Map{"status": "success", "code": 200, "message": "Listings found", "data": listings})
 }
