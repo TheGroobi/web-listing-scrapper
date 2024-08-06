@@ -13,7 +13,7 @@ type CarListing struct {
 	Year     uint16
 	Power    uint16
 	Mileage  uint32
-	ID       uint64 `gorm:"primaryKey"`
+	ID       uint64 `gorm:"primaryKey;autoIncrement"`
 	Price    float64
 }
 type Config struct {

@@ -19,11 +19,12 @@ var (
 	listing           models.CarListing
 	power             uint64
 	mileage           uint64
-	pageCount         int = 1
+	pageCount         = 1
 	mutex             sync.Mutex
-	currentPage       int = 1
-	anchorsFound      int = 0
-	totalAnchorsFound int = 0
+	currentPage       = 1
+	anchorsFound      = 0
+	totalAnchorsFound = 0
+	notFoundOffers    = 0
 )
 
 func ScrapArticles(link string) {
@@ -47,8 +48,12 @@ func ScrapArticles(link string) {
 		saveAllListings()
 	})
 
+	offerCollector.OnError(func(r *colly.Response, err error) {
+		errorHandler(r, err)
+		notFoundOffers++
+		fmt.Printf("Offers missing %d\n", notFoundOffers)
+	})
 	c.OnError(errorHandler)
-	offerCollector.OnError(errorHandler)
 
 	c.OnScraped(func(r *colly.Response) {
 		onScrapedHandler(r, link, offerCollector)
@@ -128,7 +133,7 @@ func offerSummaryHandler(e *colly.HTMLElement) {
 	}
 
 	listing := getOrCreateListing(e.Request.URL.String())
-	listing.Title = e.ChildText("div h3.offer-title")
+	listing.Title = e.ChildText("div h1.offer-title")
 	listing.Price = price
 }
 
