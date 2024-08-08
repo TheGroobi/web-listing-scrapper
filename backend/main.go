@@ -17,6 +17,7 @@ func main() {
 	db.InitDB(cfg)
 	db.DBStatus()
 
+	router.SetHeaders(app)
 	router.SetupRouter(app)
 	log.Fatal(app.Listen(fmt.Sprintf(":%s", cfg.ServerPort)))
 }

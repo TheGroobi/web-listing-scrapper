@@ -13,8 +13,8 @@ func GetListings(c *fiber.Ctx) error {
 	db.Find(&listings)
 
 	if len(listings) == 0 {
-		return c.Status(404).JSON(fiber.Map{"status": "error", "code": 404, "message": "No listings found", "data": nil})
+		return c.Status(404).JSON(fiber.Map{"statusCode": 404, "ok": false, "error": "No listings found"})
 	}
 
-	return c.Status(200).JSON(fiber.Map{"status": "success", "code": 200, "message": "Listings found", "data": listings})
+	return c.Status(200).JSON(fiber.Map{"statusCode": 200, "ok": true, "message": "Listings found", "data": listings})
 }
